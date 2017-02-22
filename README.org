@@ -1,6 +1,6 @@
 #+TITLE: Rate Limiting at Lookout
-Rate limiting is a strategy that basically provides Quality of Service
-(QOS) guarantees about a particular service.  This task can be broken
+Rate limiting is a strategy that can help meet Quality of Service
+(QOS) contracts for a particular service.  This task can be broken
 out into several different use cases:
 
 - protecting services from either malicious or unintentional DOS'ing
