@@ -1,0 +1,333 @@
+#+TITLE: Rate Limiting at Lookout
+#+PROPERTY: mkdirp yes
+
+* Summary
+Rate limiting is a strategy that can help meet Quality of Service
+(QOS) contracts for a particular service.  This task can be broken
+out into several different use cases:
+
+- protecting services from either malicious or unintentional DOS'ing
+- differentiating between different customers to provide higher limits
+  to some APIs than other customers
+- load-shed some APIs that are misbehaving or need some space to catch
+  up on a backup of requests
+- shut off external traffic for a time while allowing internal traffic
+
+A Rate limit rule has different priorities.  For each API, we'll want
+to establish a base limit but then we may want to narrow or widen the
+capabilities depending on the identity UUID or the enterprise UUID.
+
+Each API endpoint can have multiple rate limit rules where if anyone
+of them is hit, then we need to deny the request.  Initially, I see
+there being three style of rules:
+
+- general API limits to protect services from too much traffic (load-shedding)
+- a limit per enterprise to protect from abuse
+- a limit per identity/subject to also protect from abuse
+
+We'll create a general style of rule which will take a =Request=
+and hash it to some bucket of type =String=. We chose =String= as it makes
+things a bit easier to read and understand, although choosing some
+numeric might make things perform a bit better.  We can also easily
+prefix the rule's bucket with the name of the service and endpoint to
+create a namespaced bucket that won't conflict with other buckets.
+
+The subject and enterprise UUIDs are extracted from the =Request= header
+Bearer token.
+
+#+NAME: model-rate-limit-rule
+#+begin_src scala
+case class RateLimitRule(bucketName: Request => String, threshold: Int, period: TimeUnit)
+#+end_src
+
+APIS:
+- /apis [GET, POST]
+- /apis/:id [GET, PUT, DELETE]
+- /apis/:id/ratelimit [GET, POST]
+- /apis/:id/ratelimit/:id [GET, PUT, DELETE]
+
+* Definitions
+** Service
+A service is a collection of APIs that all use the same computing
+resource, i.e. a microservice may publish 3 different endpoints which
+are all exposed on the API gateway.  A service is defined by a URI
+that includes the scheme, port (if not the default), hostname and
+prefix.
+
+All requests need to belong to some service.
+
+#+NAME: model-service
+#+begin_src scala
+case class Service(name: String, apis: Set[API])
+#+end_src
+
+** API
+An API is an endpoint that is associated with a Service and it has a
+path and could require authentication or not:
+
+#+NAME: model-api
+#+begin_src scala
+case class API(path: URI, endpoints: Set[Endpoint], authenticationRequired: Boolean = true)
+#+end_src
+
+** Endpoint
+An Endpoint is an API with an HTTP method and RateLimitRule(s).
+
+#+NAME: model-endpoint
+#+begin_src scala
+case class Endpoint(method: String, rateLimitRules: Set[RateLimitRule])
+#+end_src
+
+** Rate Limit Rule
+Rate limits need to have the following properties:
+
+- a match object
+- a threshold
+- a period
+- a HTTP method
+- enterprise UUID
+- identity UUID or subject UUID
+- an id - optional
+- a description - optional
+- a disabled flag - optional
+
+The crux of a rate limit is a threshold and a period during which the threshold is active.
+There are three flavors:
+
+- individual subject (e.g., devices, user accounts, applications or services)
+- enterprise (e.g., entity, enterprise)
+- service
+
+For enterprise and service rate limit rules, all requests are counted towards the threshold
+regardless of who made the call.
+
+** Match object or Bucket
+The match object is a programmatic way of describing what should get
+rate limited. We will want to match on the API being called (i.e. the
+path, the scheme and the method), as well as the response.  The
+filtering on response is nice to have to prevent abuses for failed
+attempts without affecting good requests.
+
+- path - regexp
+- method
+- response - optional
+
+We have three different buckets that a request could map to:
+
+- service bucket
+- subject bucket
+- enterprise bucket
+
+All requests that map to the same service will increment the =service bucket=,
+i.e., l4e and argos are services and all requests to them would count against
+the =service bucket=. The purpose of this bucket would be for load shedding
+for the entire service. The =service bucket= will require some kind of map lookup
+where given a path, we should then extract some string that represents the string.
+This could be represented by some function that we pass into the `apply` method by
+a higher order function of type using a tagged type to indicate that it's a special string:
+
+#+BEGIN_SRC scala
+Request => String @@ ServiceName
+#+END_SRC
+
+The subject and enterprise buckets are more for fairness and enforcing billing tiers.
+They are extracted from the JWT that is provided in the Bearer token
+as the 'sub' and 'ent' claim. For now, we can model this as another higher ordered
+function that gets passed into the `apply` method that would have a type signature of:
+
+#+BEGIN_SRC scala
+Request => Option[(UUID @@ SubClaim, UUID @@ EntClaim)]
+#+END_SRC
+
+We should flip the order of the arguments to better facilitate currying. A proposed `apply` signature
+here would look like:
+
+#+BEGIN_SRC scala
+def apply(
+  serviceLookup: Request => String @@ Service,
+  claimLookup: Request => Option[(UUID @@ EntClaim, UUID @@ SubClaim)],
+  request: Request
+): List[String]
+#+END_SRC
+
+The return type is a `List[String]` to reflect that we may return multiple buckets that would
+all need to be checked against.
+* Components
+** Bucket Function
+We'll use String as our Bucket type as that maps nicely to Redis'
+namespaced keys.
+
+Pseudocode:
+#+begin_src scala
+
+  val bucketFn: Request => List[String] = request match {
+    case AccessTokenRequest(accessToken: JWT) => (request.path |+| accessToken.get("sub"))
+    case _ => (request.path |+| "unauthenticated")
+  }
+
+  trait Store[Key, Value] // Redis = String, Int
+
+  def doRateLimitCount(bucketFn: Request => List[String], req: Request, storage: Store[String, Int]): Future[Int] = {
+    storage.inc(bucketFn(req), Inc)
+  }.map {
+    // Don't block the request, instead have a local circuit breaker
+    case cnt if cnt > limit => concurrentHashMap.put(window, identity)
+  }
+
+  // Identity === Tuple2[IdentityUUID, EnterpriseUUID]
+  // List[RateLimitRules]
+  // NOTE is `matchFn` the same as `rateLimitMatch`?
+  case class RateLimitRule(
+    path: java.util.Pattern,
+    threshold: Int,
+    period: Duration,
+    method: Option[Method],
+    targetEnterprise: Option[EnterpriseUUID]
+  )
+
+  def rateLimitMatch(rule: RateLimitRule, request: Request): Boolean = ...
+
+  def findRule(rules: List[RateLimitRule], req: Request): Option[RateLimitRule] = req match {
+    case AccessTokenRequest(accessToken: JWT) =>
+      (rules.filter(rule => rule.targetEnterprise == Some(accessToken.get("ent")) && rule.matchFn(req))
+         ++ rules.filter(rule => rule.matchFn(req) && rule.targetEnterprise.isEmpty)).headOption
+    case _ => rules.filter(_.specification.isEmpty).headOption
+  }
+
+  def getRateLimitCount: Future[Int]
+#+end_src
+
+** Leaky Bucket Algorithm
+For tracking our rates against a limit, we'll use a slightly modified
+Leaky Bucket algorithm that will use a set of timestamps as the
+"drops" that are put into the bucket.  This way, we don't have to have
+a separate worker that is removing items from the bucket and we can
+instead just "drain" the bucket of timestamps that are from before
+it's time.
+
+This does run us into our old friend of clock skew in a distributed
+environment as we will be relying on clocks to be "relatively" in sync
+or else it will dramatically change our limits.  This can be mitigated
+somewhat by designating a single authoritative clock, e.g. use the
+Redis =time= command on the server of the SQL server's =systime= call.
+As I don't want to setup a logical clock between all of our nodes,
+we're going to punt on this for now and say it should be good enough
+to just use the server clock.
+
+The other nice part about abstracting away the clock to just be the
+server clock is then the client never needs to worry about pushing a
+timestamp to the server.
+
+So the Leaky Bucket algorithm consists of three operations:
+
+- =Create= to ensure that a bucket is created with the proper
+  parameters
+- =Put= to put a particular a token into the bucket
+- =Leak= to remove expired tokens from the bucket and get the
+  remaining tokens and params of the bucket
+
+The parameters of our buckets will be some threshold value over a
+duration of time where it is assumed that the bucket will leak at a
+constant rate over that duration.  We'll create a type alias for this:
+
+#+begin_src scala
+type BucketParams = (Int, Duration)
+#+end_src
+
+Creating an ADT of this would result in the following:
+
+#+begin_src scala
+sealed trait LeakyBucketA[A]
+case class Create(bucketName: String, params: BucketParams) extends LeakyBucketA[Unit]
+// Why LeakyBucketA[Unit] and not LeakyBucketA[(Int, BucketParams)]?
+// What does the `Int` in LeakyBucketA[(Int, BucketParams)] represent?
+case class Put(bucketName: String) extends LeakyBucketA[Unit]
+case class Leak(bucketName: String) extends LeakyBucketA[(Int, BucketParams)]
+#+end_src
+
+We will now need to define a =Free= monad version of this ADT so we
+can create different interpreters:
+
+#+begin_src scala
+type LeakyBucket = Free[LeakyBucketA, A]
+#+end_src
+
+And now we'll want to create some convenience classes that lift into
+our Free monad:
+
+#+begin_src scala
+def create(bucketName: String, params: BucketParams): LeakyBucket[Unit] =
+  liftF[LeakyBucketA, Unit](Create(bucketName, params))
+
+def put(bucketName: String): LeakyBucket[Unit] =
+  liftF[LeakyBucketA, Unit](Put(bucketName))
+
+def leak(bucketName: String): LeakyBucket[Unit] =
+  liftF[LeakyBucketA, (Int, BucketParams)](Leak(bucketName))
+#+end_src
+
+** Bucket Name Normalization
+Each request that comes in should map to a canonical bucket name.  The
+bucket name is constructed from the method, path, and Lookout
+Identity UUID.
+
+The format of the bucket name should be:
+
+#+begin_example
+<METHOD>:<PATH>:<UUID>
+#+end_example
+
+If the request does not have a Lookout Access Token, then the UUID
+will be "unauthenticated".
+
+For example, a request to
+=https://api.lookout.com/my-api-call?foo=bar= should have the bucket name:
+
+#+begin_example
+https:GET:/my-api-call:unauthenticated
+#+end_example
+
+All values should always be lower case.
+
+We'll first create a test for GET requests:
+
+
+* Implementation Notes
+** Flow
+#+begin_example
+Injection of map of paths to service -> filter / leaky bucket logic -> redis operations
+#+end_example
+
+
+** RequestNormalization
+#+begin_src sh
+curl -H "Authorization: <token>" -X GET "https://api.lookout.com/my-api-endpoint?foo=bar"
+# get:my-api-endpoint:<token>
+#+end_src
+
+#+begin_example
+<METHOD>:<PATH>:<UUID>
+
+<METHOD> - \GET|POST|DELETE|PUT|PATCH\
+<PATH> - \/.*\
+<UUID> - accessToken.get("sub") || "unauthenticated"
+#+end_example
+
+** RateLimitingRule
+For the rate limit rules there are 3 different rule types defined here:
+-- https://gerrit.corp.lookout.com/#/c/89128/2/src/main/scala/com/lookout/gatewayconfigservice/model/RateLimit.scala
+
+
+* Test Notes
+RateLimitRuleSpec
+#+begin_example
+The RateLimitRule should
+  match fully specified requests: ${fullySpecified}
+  match postfix wildcard requests: ${postfix}
+  match prefixed wildcard requests: ${prefix}
+  match requests with a wildcard in the middle: ${middle}
+  not match requests below a threshold: ${belowThreshold}
+  match requests above a threshold: ${aboveThreshold}
+  not match requests that don't contain the enterprise UUID: ${notEnterprise}
+  match requests that do contain the enterprise UUID: ${enterprise}
+#+end_example

@@ -1,163 +1,19 @@
-#+TITLE: Rate Limiting at Lookout
-Rate limiting is a strategy that can help meet Quality of Service
-(QOS) contracts for a particular service.  This task can be broken
-out into several different use cases:
+#+TITLE: Rate Limiting Filter
+A finagle filter for rate limiting requests in Border Patrol.
+Requests will pass through this filter after they pass through
+the AccessTokenFilter in Border Patrol.
 
-- protecting services from either malicious or unintentional DOS'ing
-- differentiating between different customers to provide higher limits
-  to some APIs than other customers
-- load-shed some APIs that are misbehaving or need some space to catch
-  up on a backup of requests
--- shut off external traffic for a time while allowing internal traffic
+For more details, please see DESIGN.org.
 
-* Definitions
-** Service
-A service is a collection of APIs that all use the same computing
-resource, i.e. a microservice may publish 3 different endpoints which
-are all exposed on the API gateway.  A service is defined by a URI
-that includes the scheme, port (if not the default), hostname and
-prefix.
+* Development Setup
+Install Scala and SBT - http://www.scala-sbt.org/0.13/docs/Setup.html
 
-#+NAME: model-service
-#+begin_src scala
-case class Service(identity: UUID, enterprise: UUID, name: String, uri: URI, apis: Set[API])
-#+end_src
+Alternatively, you can use a self-contained sbt script:
+#+BEGIN_SRC sh
+./ci/bin/sbt
+#+END_SRC
 
-** API
-An API is an endpoint that is associated with a Service and it has a
-path and could require authentication or not:
-
-#+NAME: model-api
-#+begin_src scala
-case class API(path: URI, endpoints: Set[Endpoint], authenticationRequired: Boolean = true)
-#+end_src
-** Endpoint
-An Endpoint is an API and it's HTTP method:
-
-#+NAME: model-endpoint
-#+begin_src scala
-case class Endpoint(method: String, rateLimitRules: Set[RateLimitRule])
-#+end_src
-** Rate Limit Rule
-Rate limits need to have the following properties:
-
-- a match object
-- a threshold
-- a period
-- an action
-- enterprise UUID
-- identity UUID
-- an id - optional
-- a description - optional
-- a disabled flag - optional
-
-*** Match object
-The match object is a programmatic way of describing what should get
-rate limited.  We will want to match on the API being called (i.e. the
-path, the scheme and the method), as well as the response.  The
-filtering on response is nice to have to prevent abuses for failed
-attempts without affecting good requests.
-
-- path - regexp
-- scheme
-- method
-- response
-*** Bucket Function
-We'll use String as our Bucket type as that maps nicely to Redis'
-namespaced keys:
-
-#+begin_src scala
-val bucketFn: (Request, Long) => String = req._1 match {
-  case AccessTokenRequest(accessToken: JWT) =>
-    (request.path |+| accessToken.get("sub") |+| req._2 % 2)
-  case _ => (request.path |+| "unauthenticated")
-}
-
-trait Store[Key, Value] // Redis = String, Int
-
-def doRateLimitCount(bucketFn: Request => List[String], req: Request, storage: Store[String, Int]): Future[Int] = {
-  storage.inc(bucketFn(req), Inc)
-}.map {
-  // Don't block the request, instead have a local circuit breaker
-  case cnt if cnt > limit => concurrentHashMap.put(window, identity)
-}
-
-// Identity === Tuple2[IdentityUUID, EnterpriseUUID]
-// List[RateLimitRules]
-case RateLimitRule(
-  path: java.util.Pattern,
-  threshold: Int,
-  period: Duration,
-  method: Option[Method],
-  scheme: Option[String], // should this always be https?
-  targetEnterprise: Option[EnterpriseUUID])
-
-def rateLimitMatch(rule: RateLimitRule, request: Request): Boolean = ...
-
-def findRule(rules: List[RateLimitRule], req: Request): Option[RateLimitRule] = req match {
-  case AccessTokenRequest(accessToken: JWT) =>
-    (rules.filter(rule => rule.targetEnterprise == Some(accessToken.get("ent")) && rule.matchFn(req)) ++
-      rules.filter(rule => rule.matchFn(req) && rule.targetEnterprise.isEmpty)).headOption
-  case _ => rules.filter(_.specification.isEmpty).headOption
-}
-
-def getRateLimitCount: Future[Int]
-
-#+end_src
-
-#+begin_src json
-{
-  "sub": "DEAD-BEEF-BLAH-BLAH",
-  "ent": "FEED-FED-BEEF"
-}
-#+end_src
-Open questions:
-- TODO do we rate limit with respect to query params?
--- No, the rate limit is with respect to the API endpoint.  Query
-   params are modifiers of that API call.
-- TODO can we specify 'not' parameters?
--- Keep it simple and not add now
-
-** Older Rate Limit text
-A Rate limit rule has different priorities.  For each API, we'll want
-to establish a base limit but then we may want to narrow or widen the
-capabilities depending on the identity UUID or the enterprise UUID.
-
-
-Each API endpoint can have multiple rate limit rules where if anyone
-of them is hit, then we need to deny the request.  Initially, I see
-there being three style of rules:
-
-- general API limits to protect services from too much traffic
-- a limit per enterprise to protect from abuse
-- a limit per identity to also protect from abuse
-
-We'll create a general style of rule which will take an =JWT= and hash
-it to some bucket of type =String=.  We chose =String= as it makes
-things a bit easier to read and understand, although choosing some
-numeric might make things perform a bit better.  We can also easily
-prefix the rule's bucket with the name of the service and endpoint to
-create a namespaced bucket that won't conflict with other buckets.
-
-#+NAME: model-rate-limit-rule
-#+begin_src scala
-case class RateLimitRule(bucket: JWT => String, limit: Int, timeUnit: TimeUnit)
-#+end_src
-
-So to establish a base limit for an API of 100 requests per minute:
-
-#+begin_src scala
-val rule = new RateLimitRule[Int](_ => "base", 100, TimeUnit.MINUTE)
-#+end_src
-
-#+begin_src scala
-// RateLimitingStrategy: Request => Boolean
-
-// Response => Unit
-#+end_src
-
-APIS:
-- /apis [GET, POST]
-- /apis/:id [GET, PUT, DELETE]
-- /apis/:id/ratelimit [GET, POST]
-- /apis/:id/ratelimit/:id [GET, PUT, DELETE]
+* Running Tests
+#+BEGIN_SRC sh
+sbt test
+#+END_SRC

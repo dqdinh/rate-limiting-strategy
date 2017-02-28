@@ -1,0 +1,11 @@
+README.org\[*
+DESIGN.org\[*
+temp.org*
+temp.scala
+
+
+*.class
+*.log
+
+project/target
+target
