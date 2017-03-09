@@ -174,9 +174,6 @@ Pseudocode:
     case cnt if cnt > limit => concurrentHashMap.put(window, identity)
   }
 
-  // Identity === Tuple2[IdentityUUID, EnterpriseUUID]
-  // List[RateLimitRules]
-  // NOTE is `matchFn` the same as `rateLimitMatch`?
   case class RateLimitRule(
     path: java.util.Pattern,
     threshold: Int,
@@ -194,7 +191,6 @@ Pseudocode:
     case _ => rules.filter(_.specification.isEmpty).headOption
   }
 
-  def getRateLimitCount: Future[Int]
 #+end_src
 
 ** Leaky Bucket Algorithm
@@ -229,6 +225,8 @@ So the Leaky Bucket algorithm consists of three operations:
 The parameters of our buckets will be some threshold value over a
 duration of time where it is assumed that the bucket will leak at a
 constant rate over that duration.  We'll create a type alias for this:
+
+JS reference - https://engineering.classdojo.com/blog/2015/02/06/rolling-rate-limiter/
 
 #+begin_src scala
 type BucketParams = (Int, Duration)
@@ -289,45 +287,3 @@ https:GET:/my-api-call:unauthenticated
 
 All values should always be lower case.
 
-We'll first create a test for GET requests:
-
-
-* Implementation Notes
-** Flow
-#+begin_example
-Injection of map of paths to service -> filter / leaky bucket logic -> redis operations
-#+end_example
-
-
-** RequestNormalization
-#+begin_src sh
-curl -H "Authorization: <token>" -X GET "https://api.lookout.com/my-api-endpoint?foo=bar"
-# get:my-api-endpoint:<token>
-#+end_src
-
-#+begin_example
-<METHOD>:<PATH>:<UUID>
-
-<METHOD> - \GET|POST|DELETE|PUT|PATCH\
-<PATH> - \/.*\
-<UUID> - accessToken.get("sub") || "unauthenticated"
-#+end_example
-
-** RateLimitingRule
-For the rate limit rules there are 3 different rule types defined here:
--- https://gerrit.corp.lookout.com/#/c/89128/2/src/main/scala/com/lookout/gatewayconfigservice/model/RateLimit.scala
-
-
-* Test Notes
-RateLimitRuleSpec
-#+begin_example
-The RateLimitRule should
-  match fully specified requests: ${fullySpecified}
-  match postfix wildcard requests: ${postfix}
-  match prefixed wildcard requests: ${prefix}
-  match requests with a wildcard in the middle: ${middle}
-  not match requests below a threshold: ${belowThreshold}
-  match requests above a threshold: ${aboveThreshold}
-  not match requests that don't contain the enterprise UUID: ${notEnterprise}
-  match requests that do contain the enterprise UUID: ${enterprise}
-#+end_example

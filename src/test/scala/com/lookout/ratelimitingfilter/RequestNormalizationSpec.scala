@@ -44,10 +44,10 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val method = request.method.toString
-      RequestNormalization(_ => Some(serviceName), _ => Some(claimUUIDs), request)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request)
         .map(_ must startWith(s"$method::"))
         .reduce(_ and _)
     }
@@ -57,10 +57,10 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val path = URLEncoder.encode(request.path, "UTF-8").toLowerCase
-      RequestNormalization(_ => Some(serviceName), _ => Some(claimUUIDs), request)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request)
         .map(_ must contain(s"::$path::"))
         .reduce(_ and _)
     }
@@ -70,10 +70,10 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val delimiterPattern = """(.*)::(.*)::(.*)""".r
-      RequestNormalization(_ => Some(serviceName), _ => Some(claimUUIDs), request)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request)
         .map(_ must beMatching(delimiterPattern))
         .reduce(_ and _)
     }
@@ -83,9 +83,9 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: Option[(UUID @@ EntClaim, UUID @@ SubClaim)]
+      claimUuids: Option[(UUID @@ EntClaim, UUID @@ SubClaim)]
     ) => {
-      RequestNormalization(_ => Some(serviceName), _ => claimUUIDs, request)
+      RequestNormalization(_ => Some(serviceName), _ => claimUuids, request)
         .map(_ must endWith(s"::$serviceName"))
         .reduce(_ or _)
     }
@@ -95,11 +95,11 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: Option[String @@ Service],
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      val entUUID = claimUUIDs._1.toString
-      RequestNormalization(_ => serviceName, _ => Some(claimUUIDs), request)
-        .map(_ must endWith(s"::$entUUID"))
+      val entUuid = claimUuids._1.toString
+      RequestNormalization(_ => serviceName, _ => Some(claimUuids), request)
+        .map(_ must endWith(s"::$entUuid"))
         .reduce(_ or _)
     }
   }
@@ -108,11 +108,11 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: Option[String @@ Service],
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      val subUUID = claimUUIDs._2.toString
-      RequestNormalization(_ => serviceName, _ => Some(claimUUIDs), request)
-        .map(_ must endWith(s"::$subUUID"))
+      val subUuid = claimUuids._2.toString
+      RequestNormalization(_ => serviceName, _ => Some(claimUuids), request)
+        .map(_ must endWith(s"::$subUuid"))
         .reduce(_ or _)
     }
   }
@@ -121,9 +121,9 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      RequestNormalization(_ => None, _ => Some(claimUUIDs), request)
+      RequestNormalization(_ => None, _ => Some(claimUuids), request)
         .map(_ must not endWith(s"::$serviceName"))
         .reduce(_ and _)
     }
@@ -133,11 +133,11 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      val entUUID = claimUUIDs._1.toString
+      val entUuid = claimUuids._1.toString
       RequestNormalization(_ => Some(serviceName), _ => None, request)
-        .map(_ must not endWith(s"::$entUUID"))
+        .map(_ must not endWith(s"::$entUuid"))
         .reduce(_ and _)
     }
   }
@@ -146,11 +146,11 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      val subUUID = claimUUIDs._2.toString
+      val subUuid = claimUuids._2.toString
       RequestNormalization(_ => Some(serviceName), _ => None, request)
-        .map(_ must not endWith(s"::$subUUID"))
+        .map(_ must not endWith(s"::$subUuid"))
         .reduce(_ and _)
     }
   }
@@ -159,15 +159,15 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     (
       request: Request,
       serviceName: String @@ Service,
-      claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      RequestNormalization(_ => Some(serviceName), _ => Some(claimUUIDs), request) must have size(3)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request) must have size(3)
     }
   }
 
   def twoBucketNames = prop {
-    (request: Request, claimUUIDs: (UUID @@ EntClaim, UUID @@ SubClaim)) => {
-      RequestNormalization(_ => None, _ => Some(claimUUIDs), request) must have size(2)
+    (request: Request, claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)) => {
+      RequestNormalization(_ => None, _ => Some(claimUuids), request) must have size(2)
     }
   }
 

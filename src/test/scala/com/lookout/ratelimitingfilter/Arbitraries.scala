@@ -1,8 +1,10 @@
 package com.lookout.ratelimitingfilter
 
 import java.net.URL
+import java.net.URLEncoder
 import java.util.UUID
 import com.twitter.finagle.http.{Method, Request}
+import com.twitter.util.Duration
 import org.scalacheck.{Gen, Arbitrary}
 import shapeless.{tag}
 import shapeless.tag._
@@ -51,6 +53,62 @@ trait Arbitraries {
     subClaim <- Gen.uuid
   } yield (tag[EntClaim](entClaim), tag[SubClaim](subClaim))
 
+  // TODO DRY RateLimitRule generation
+  // NOTE In order to pass on request state, RateLimitRules generators produce
+  // a tuple of (RateLimitRule, Request)
+  val genServiceRule: Gen[(ServiceRule, Request)] = for {
+    request <- genRequest
+    target <- genServiceName
+    threshold <- Gen.posNum[Int]
+    seconds <- Gen.posNum[Int]
+  } yield {
+    val period = Duration.fromSeconds(seconds)
+    val method = request.method
+    val path = new URL(request.path)
+    val encodedPath = URLEncoder.encode(request.path, "UTF-8").toLowerCase
+    val id = s"${method.toString}::${encodedPath}::$target"
+    (ServiceRule(target, threshold, period, method, path, id), request)
+  }
+
+  val genSubjectRule: Gen[(SubjectRule, Request)] = for {
+    request <- genRequest
+    (_, target) <- genClaimUUIDs
+    threshold <- Gen.posNum[Int]
+    seconds <- Gen.posNum[Int]
+  } yield {
+    val period = Duration.fromSeconds(seconds)
+    val method = request.method
+    val path = new URL(request.path)
+    val encodedPath = URLEncoder.encode(request.path, "UTF-8").toLowerCase
+    val id = s"${method.toString}::${encodedPath}::$target"
+    (SubjectRule(target, threshold, period, method, path, id), request)
+  }
+
+  val genEnterpriseRule: Gen[(EnterpriseRule, Request)] = for {
+    request <- genRequest
+    (target, _) <- genClaimUUIDs
+    threshold <- Gen.posNum[Int]
+    seconds <- Gen.posNum[Int]
+  } yield {
+    val period = Duration.fromSeconds(seconds)
+    val method = request.method
+    val path = new URL(request.path)
+    val encodedPath = URLEncoder.encode(request.path, "UTF-8").toLowerCase
+    val id = s"${method.toString}::${encodedPath}::$target"
+    (EnterpriseRule(target, threshold, period, method, path, id), request)
+  }
+
+  val genRateLimitRuleList: Gen[List[(RateLimitRule, Request)]] = for {
+    n <- Gen.choose(1, 10)
+    serviceRules <- Gen.listOfN(n, genServiceRule)
+    subjectRules <- Gen.listOfN(n, genSubjectRule)
+    enterpriseRules <- Gen.listOfN(n, genEnterpriseRule)
+  } yield List(serviceRules, subjectRules, enterpriseRules).flatten
+
+  implicit val arbitraryRateLimitRuleList: Arbitrary[List[(RateLimitRule, Request)]] = Arbitrary(genRateLimitRuleList)
+  implicit val arbitraryServiceRule: Arbitrary[(ServiceRule, Request)] = Arbitrary(genServiceRule)
+  implicit val arbitrarySubjectRule: Arbitrary[(SubjectRule, Request)] = Arbitrary(genSubjectRule)
+  implicit val arbitraryEnterpriseRule: Arbitrary[(EnterpriseRule, Request)] = Arbitrary(genEnterpriseRule)
   implicit val arbitraryClaimUUIDs: Arbitrary[(UUID @@ EntClaim, UUID @@ SubClaim)] = Arbitrary(genClaimUUIDs)
   implicit val arbitraryServiceName: Arbitrary[String @@ Service] = Arbitrary(genServiceName)
   implicit val arbitraryHttpMethod: Arbitrary[Method] = Arbitrary(genHttpMethod)

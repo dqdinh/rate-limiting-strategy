@@ -8,11 +8,6 @@ import cats._
 import cats.data._
 import cats.implicits._
 
-// These traits serve as tags to identify service strings and claim UUIDs.
-sealed trait Service
-sealed trait EntClaim
-sealed trait SubClaim
-
 /** Each request should map to a canonical bucket name. The
   * bucket name is constructed from the method, path, and either
   * a Lookout identity UUID or name.
@@ -41,7 +36,7 @@ object RequestNormalization {
     }
     val idBuckets: Option[List[String]] = claimLookup(request).map {
       case (entUuid, subUuid) =>
-        s"$method::$path::$subUuid" :: s"$method::$path::$entUuid" :: Nil
+        s"$method::$path::$entUuid" :: s"$method::$path::$subUuid" :: Nil
     }
 
     (serviceBucket |+| idBuckets).getOrElse(Nil)
