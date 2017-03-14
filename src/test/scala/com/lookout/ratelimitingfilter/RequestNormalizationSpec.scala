@@ -5,45 +5,47 @@ import java.net.URLEncoder
 import com.twitter.finagle.http.{Method, Request}
 import org.specs2.{Specification, ScalaCheck}
 import shapeless.tag._
+import com.lookout.ratelimitingfilter.models._
 
 class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitraries {
   def is = s2"""
   The RequestNormalization object
-    should create bucket names that start with the method               $method
-    should create bucket names that contain the URL encoded path        $path
-    should create bucket names seperated by "::"                        $separator
+    should create bucket ids that start with the method                   $method
+    should create a service name bucket id that does not contain the path $serviceNameBucketId
+    should create bucket ids that contain the URL encoded path            $encodedPathBucketIds
+    should create bucket ids seperated by "::"                            $separator
 
     when there is a service name mapping
-      it should create one bucket name containing the service name      $oneServiceName
+      it should create one bucket name containing the service name        $oneServiceName
 
     when there is a claims mapping
-      it should create one bucket name containing the Enterprise UUID   $oneEnterpriseUuid
-      it should create one bucket name containing the Subject UUID      $oneSubjectUuid
+      it should create one bucket name containing the Enterprise UUID     $oneEnterpriseUuid
+      it should create one bucket name containing the Subject UUID        $oneSubjectUuid
 
     when there is no service name mapping
-      it should not create a bucket name containing the service name    $noServiceName
+      it should not create a bucket name containing the service name      $noServiceName
 
     when there is no claims mapping
-      it should not create a bucket name containing the Enterprise UUID $noEnterpriseUuid
-      it should not create a bucket name containing the Subject UUID    $noSubjectUuid
+      it should not create a bucket name containing the Enterprise UUID   $noEnterpriseUuid
+      it should not create a bucket name containing the Subject UUID      $noSubjectUuid
 
     when there is a service name and a claims mapping
-      it should create a list with three bucket names                   $threeBucketNames
+      it should create a list with four bucket ids                        $fourBucketIds
 
     when there is no service name mapping but there is a claims mapping
-      it should create a list with two bucket names                     $twoBucketNames
+      it should create a list with two claim bucket ids                   $twoClaimBucketIds
 
     when there is a service name mapping but no claims mapping
-      it should create a list with one bucket name                      $oneBucketName
+      it should create a list with two service bucket ids                 $twoServiceBucketIds
 
     when there is no service name mapping and no claims mapping
-      it should create an emtpy list                                    $zeroBucketNames
+      it should create an emtpy list                                      $zeroBucketIds
   """
 
   def method = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val method = request.method.toString
@@ -53,26 +55,47 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     }
   }
 
-  def path = prop {
+  def serviceNameBucketId = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      val path = URLEncoder.encode(request.path, "UTF-8").toLowerCase
-      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request)
-        .map(_ must contain(s"::$path::"))
-        .reduce(_ and _)
+      val path = RequestNormalization.encodePath(request.path)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request) match {
+        case serviceNameBucketId :: pathBucketIds =>
+          serviceNameBucketId must_== s"${request.method}::$serviceName"
+        case Nil => (true must beFalse).setMessage(
+          "In this test context, RequestNormalization should always return a list"
+        )
+      }
+    }
+  }
+
+  def encodedPathBucketIds = prop {
+    (
+      request: Request,
+      serviceName: String @@ ServiceName,
+      claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
+    ) => {
+      val path = RequestNormalization.encodePath(request.path)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request) match {
+        case globalServiceBucketId :: pathBucketIds =>
+          pathBucketIds.map(_ must contain(s"::$path::")).reduce(_ and _)
+        case Nil => (true must beFalse).setMessage(
+          "In this test context, RequestNormalization should always return a list"
+        )
+      }
     }
   }
 
   def separator = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      val delimiterPattern = """(.*)::(.*)::(.*)""".r
+      val delimiterPattern = """(.*)::(.*::)?(.*)""".r
       RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request)
         .map(_ must beMatching(delimiterPattern))
         .reduce(_ and _)
@@ -82,7 +105,7 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
   def oneServiceName = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: Option[(UUID @@ EntClaim, UUID @@ SubClaim)]
     ) => {
       RequestNormalization(_ => Some(serviceName), _ => claimUuids, request)
@@ -94,7 +117,7 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
   def oneEnterpriseUuid = prop {
     (
       request: Request,
-      serviceName: Option[String @@ Service],
+      serviceName: Option[String @@ ServiceName],
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val entUuid = claimUuids._1.toString
@@ -107,7 +130,7 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
   def oneSubjectUuid = prop {
     (
       request: Request,
-      serviceName: Option[String @@ Service],
+      serviceName: Option[String @@ ServiceName],
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val subUuid = claimUuids._2.toString
@@ -120,7 +143,7 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
   def noServiceName = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       RequestNormalization(_ => None, _ => Some(claimUuids), request)
@@ -132,7 +155,7 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
   def noEnterpriseUuid = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val entUuid = claimUuids._1.toString
@@ -145,7 +168,7 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
   def noSubjectUuid = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
       val subUuid = claimUuids._2.toString
@@ -155,29 +178,29 @@ class RequestNormalizationSpec extends Specification with ScalaCheck with Arbitr
     }
   }
 
-  def threeBucketNames = prop {
+  def fourBucketIds = prop {
     (
       request: Request,
-      serviceName: String @@ Service,
+      serviceName: String @@ ServiceName,
       claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)
     ) => {
-      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request) must have size(3)
+      RequestNormalization(_ => Some(serviceName), _ => Some(claimUuids), request) must have size(4)
     }
   }
 
-  def twoBucketNames = prop {
+  def twoClaimBucketIds = prop {
     (request: Request, claimUuids: (UUID @@ EntClaim, UUID @@ SubClaim)) => {
       RequestNormalization(_ => None, _ => Some(claimUuids), request) must have size(2)
     }
   }
 
-  def oneBucketName = prop {
-    (request: Request, serviceName: String @@ Service) => {
-      RequestNormalization(_ => Some(serviceName), _ => None, request) must have size(1)
+  def twoServiceBucketIds = prop {
+    (request: Request, serviceName: String @@ ServiceName) => {
+      RequestNormalization(_ => Some(serviceName), _ => None, request) must have size(2)
     }
   }
 
-  def zeroBucketNames = prop { (request: Request) =>
+  def zeroBucketIds = prop { (request: Request) =>
     RequestNormalization(_ => None, _ => None, request) must beEmpty
   }
 }

@@ -1,16 +1,18 @@
-package com.lookout.ratelimitingfilter
+package com.lookout.ratelimitingfilter.models
 
 import java.util.UUID
 import java.net.URL
 import com.twitter.util.Duration
 import com.twitter.finagle.http.Method
-import shapeless.tag
 import shapeless.tag._
 
-// These traits serve as tags to identify service strings and claim UUIDs.
-sealed trait Service
+// String and UUID tagged types
+
+sealed trait ServiceName
 sealed trait EntClaim
 sealed trait SubClaim
+
+// Rate Limiting Rule ADTs
 
 sealed trait RateLimitRule {
   val threshold: Int;
@@ -21,7 +23,7 @@ sealed trait RateLimitRule {
 }
 
 final case class ServiceRule(
-  val target: String @@ Service,
+  val target: String @@ ServiceName,
   val threshold: Int,
   val period: Duration,
   val method: Method,
@@ -46,6 +48,8 @@ final case class EnterpriseRule(
   val path: URL,
   val id: String
 ) extends RateLimitRule
+
+// Rate Limiting Rule extractors
 
 object ServiceRuleId {
   def unapply(rule: ServiceRule): Option[String] = Some(rule.id)

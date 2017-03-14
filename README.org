@@ -17,3 +17,8 @@ Alternatively, you can use a self-contained sbt script:
 #+BEGIN_SRC sh
 sbt test
 #+END_SRC
+
+* Running an example http server with the rate limiting filter
+#+BEGIN_SRC sh
+sbt "project example" "run HttpServer"
+#+END_SRC

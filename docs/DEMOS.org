@@ -1,0 +1,108 @@
+#+TITLE: Demos
+#+PROPERTY: mkdirp yes
+
+* Rate Limiting Demo 3/14
+** Quick Background
+** A Finagle filter for rate limiting requests that pass through BP.
+
+#+BEGIN_SRC scala
+trait Service[Req, Rep] extends (Req => Future[Rep])
+
+trait SimpleFilter[Request, Response] extends Filter[Request, Response, Request, Response]
+
+class IdenityFilter[Request, Response] extends SimpleFilter[Requset, Response] {
+  def apply(request: Request, service: Service[Request, Response]): Future[Response] = {
+    service(request)
+  }
+}
+#+END_SRC
+
+- TLDR; A filter takes a Request, a Service, and returns a Future Response
+
+- Allows composition so you can chain filters together as the request travels through a service
+
+- In this case, we have a set of rules that match requests based on traits
+  like the service that the request is targeting.
+ 
+- An incoming request can match 0, 1, or more rate limiting rules.
+
+- When a rule is triggered, the rate limit defined as the combination of a rule's
+  predefined =period= and =threshold= will determine if it is blocked.
+
+** Anatomy of a Rate Limit Rule
+#+BEGIN_SRC scala
+// Threshold - limit on number of requests
+// Period - Duration of time until threshold resets
+sealed trait RateLimitRule {
+  val threshold: Int;
+  val period: Duration;
+  val method: Method;
+  val path: URL;
+  val id: String;
+}
+
+// Target - Service Name, UUIDs, ect.,
+// Id - Unique Identitifier used to match requests.
+//      Typically of the form: "<METHOD>::<PATH>::<Target>"
+//      where <METHOD> and/or <PATH> is optional.
+final case class ServiceRule(
+  val target: String @@ ServiceName,
+  val threshold: Int,
+  val period: Duration,
+  val method: Method,
+  val path: URL,
+  val id: String
+) extends RateLimitRule
+#+END_SRC
+
+** Leaky bucket algorithm
+We define buckets for each type of request we want to rate limit.
+ 
+- In our case, there are currently four types of buckets:
+  
+  Service Name bucket - <METHOD>::<Service Name>
+  Service API bucket  - <METHOD>::<PATH>::<Service Name>
+  Subject bucket      - <METHOD>::<PATH>::<Subject UUID>
+  Enterprise bucket   - <METHOD>::<PATH>::<Enterprise UUID>
+
+- For example, if a =GET= request hits a service =A= at endpoint =/a=,
+  then the Service Name Bucket would be =GET::A= and it's Service API
+  Bucket would be =GET::/a::A=
+
+- A majority of the algorithm is defined as a series of Redis operations
+  that are atomic and serial:
+  (1) leak a bucket
+  (2) add a new sorted set to a bucket
+  (3) reset the bucket's TTL
+  (4) return the number of elements in the bucket
+
+#+BEGIN_SRC scala
+redis.pipeline { batch =>
+  batch.zremrangebyscore(bucketId, 0, clearBefore) // leak bucket
+  batch.zadd(bucketId, currentTime, currentTime.toString) // add new set to bucket
+  batch.expire(bucketId, period.inSeconds) // reset bucket TTL
+  batch.zcard(bucketId) // return number of elements in bucket
+}
+#+END_SRC
+
+** Demo setup
+- Http server running with ratelimit filter
+- redis as the data store
+- There are two rateLimitRules:
+(1) Global rule on service =les= at rate of =10 requests / 60 seconds=
+(2) API rule on service =les= at URL =/les= and at rate of =5 requests / 60 seconds=
+- We'll call GET on /les and after 5 times, it will trigger the rate limit.
+- However, calling / will still pass through, but it will rate limit after 5 times
+
+** Run 1: Rate Limit by API and Service Name
+- run `curl localhost:8080/les` times 5
+- show server println
+- show redis logs
+- check redis console
+
+** Run 2: Rate Limit by Service Name
+- run `curl localhost:8080` times 5
+- show server println
+- show redis logs
+- check redis console
+

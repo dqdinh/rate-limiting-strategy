@@ -144,7 +144,7 @@ here would look like:
 
 #+BEGIN_SRC scala
 def apply(
-  serviceLookup: Request => String @@ Service,
+  serviceLookup: Request => String @@ ServiceName,
   claimLookup: Request => Option[(UUID @@ EntClaim, UUID @@ SubClaim)],
   request: Request
 ): List[String]
@@ -152,46 +152,11 @@ def apply(
 
 The return type is a `List[String]` to reflect that we may return multiple buckets that would
 all need to be checked against.
+
 * Components
 ** Bucket Function
 We'll use String as our Bucket type as that maps nicely to Redis'
 namespaced keys.
-
-Pseudocode:
-#+begin_src scala
-
-  val bucketFn: Request => List[String] = request match {
-    case AccessTokenRequest(accessToken: JWT) => (request.path |+| accessToken.get("sub"))
-    case _ => (request.path |+| "unauthenticated")
-  }
-
-  trait Store[Key, Value] // Redis = String, Int
-
-  def doRateLimitCount(bucketFn: Request => List[String], req: Request, storage: Store[String, Int]): Future[Int] = {
-    storage.inc(bucketFn(req), Inc)
-  }.map {
-    // Don't block the request, instead have a local circuit breaker
-    case cnt if cnt > limit => concurrentHashMap.put(window, identity)
-  }
-
-  case class RateLimitRule(
-    path: java.util.Pattern,
-    threshold: Int,
-    period: Duration,
-    method: Option[Method],
-    targetEnterprise: Option[EnterpriseUUID]
-  )
-
-  def rateLimitMatch(rule: RateLimitRule, request: Request): Boolean = ...
-
-  def findRule(rules: List[RateLimitRule], req: Request): Option[RateLimitRule] = req match {
-    case AccessTokenRequest(accessToken: JWT) =>
-      (rules.filter(rule => rule.targetEnterprise == Some(accessToken.get("ent")) && rule.matchFn(req))
-         ++ rules.filter(rule => rule.matchFn(req) && rule.targetEnterprise.isEmpty)).headOption
-    case _ => rules.filter(_.specification.isEmpty).headOption
-  }
-
-#+end_src
 
 ** Leaky Bucket Algorithm
 For tracking our rates against a limit, we'll use a slightly modified
@@ -226,8 +191,6 @@ The parameters of our buckets will be some threshold value over a
 duration of time where it is assumed that the bucket will leak at a
 constant rate over that duration.  We'll create a type alias for this:
 
-JS reference - https://engineering.classdojo.com/blog/2015/02/06/rolling-rate-limiter/
-
 #+begin_src scala
 type BucketParams = (Int, Duration)
 #+end_src
@@ -237,8 +200,6 @@ Creating an ADT of this would result in the following:
 #+begin_src scala
 sealed trait LeakyBucketA[A]
 case class Create(bucketName: String, params: BucketParams) extends LeakyBucketA[Unit]
-// Why LeakyBucketA[Unit] and not LeakyBucketA[(Int, BucketParams)]?
-// What does the `Int` in LeakyBucketA[(Int, BucketParams)] represent?
 case class Put(bucketName: String) extends LeakyBucketA[Unit]
 case class Leak(bucketName: String) extends LeakyBucketA[(Int, BucketParams)]
 #+end_src
@@ -251,7 +212,7 @@ type LeakyBucket = Free[LeakyBucketA, A]
 #+end_src
 
 And now we'll want to create some convenience classes that lift into
-our Free monad:
+# our Free monad:
 
 #+begin_src scala
 def create(bucketName: String, params: BucketParams): LeakyBucket[Unit] =
@@ -264,6 +225,63 @@ def leak(bucketName: String): LeakyBucket[Unit] =
   liftF[LeakyBucketA, (Int, BucketParams)](Leak(bucketName))
 #+end_src
 
+** algorithm Summary
+- reference: https://engineering.classdojo.com/blog/2015/02/06/rolling-rate-limiter/
+
+- Each request target has an associated bucket identified by an ID.
+  In our case, the ID is of the form =<METHOD>::<PATH>::<ID>=
+
+- For each incoming request, we check the capacity the associated bucket.
+
+- If the bucket is full, the request has exceeded the rate and the request is blocked.
+
+- Otherwise, we add a drop to the bucket and allow the request.
+
+- Over time, the buckets are leaked at a rate that is a function of
+  (1) current timestamp
+  (2) rate limit rule period
+  (3) rate limit rule threshold
+
+** algorithm implementation
+- All redis operations for a single rate-limit check/update are performed as an atomic transaction,
+  allowing rate limiters running on separate processes or machines to share state safely.
+
+- Each bucket has an associated sorted set. The keys and values are identical,
+  and equal to the (microsecond) times when actions were attempted.
+  
+- Before a =PUT=, we first drop all elements of the set which occured before one period ago
+  e.g., if bucketTimestamp < (current time - period), then =Leak=.
+  This can be accomplished with Redis’s =ZREMRANGEBYSCORE= command.
+  
+- We fetch all elements of the set, using =ZRANGE(0, -1)=
+
+- The current action is then added to the set using =ZADD= and timestamp key/value
+
+- We set a =TTL= equal to the rate-limiting interval on the set (to save space).
+
+- After all operations are completed, we count the number of fetched elements.
+  If it exceeds the limit, we don’t allow the action.
+  =Note= if an action is blocked, it is still added to the set.
+  This means that if a user is continually attempting actions more quickly than the allowed rate,
+  all of their actions will be blocked until they pause or slow their requests.
+
+- We also can compare the largest fetched element to the current timestamp.
+  If they’re too close, we also don’t allow the action.
+  
+- All Redis operations are performed as an atomic action, using the =MULTI= command
+  
+*** Bells and whistles
+- If the number of elements in the set is greater than a global maximum / ceiling,
+  then the current action is blocked. -- when is this checked? on =Get= or =Set= op?
+  
+- If a minimum difference has been set and the most recent previous element is too close to the current time,
+  the current action is blocked.
+
+*** Redis Defintions
+- =Sorted sets= a collections of unique string elements where every string element is associated to a floating number value, called score.
+  The elements are always taken sorted by their score, so unlike Sets it is possible to retrieve a range of elements
+  (for example you may ask: give me the top 10, or the bottom 10).
+  
 ** Bucket Name Normalization
 Each request that comes in should map to a canonical bucket name.  The
 bucket name is constructed from the method, path, and Lookout
@@ -286,4 +304,3 @@ https:GET:/my-api-call:unauthenticated
 #+end_example
 
 All values should always be lower case.
-

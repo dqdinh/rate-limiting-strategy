@@ -5,6 +5,7 @@ import java.net.URLEncoder
 import com.twitter.finagle.http.{Method, Request}
 import org.specs2.{Specification, ScalaCheck}
 import shapeless.tag._
+import com.lookout.ratelimitingfilter.models._
 
 class RateLimitRuleMatcherSpec extends Specification with ScalaCheck with Arbitraries {
   def is = s2"""
@@ -64,8 +65,13 @@ class RateLimitRuleMatcherSpec extends Specification with ScalaCheck with Arbitr
   def serviceRuleMatch = prop {
     (serviceRuleTuple: (ServiceRule, Request)) => {
       val (serviceRule, request) = serviceRuleTuple
-      val normalizedRequest = RequestNormalization(_ => Some(serviceRule.target), _ => None, request).head
-      RateLimitRuleMatcher.matchById(serviceRule, normalizedRequest) must_== true
+      RequestNormalization(_ => Some(serviceRule.target), _ => None, request) match {
+        case serviceNameBucketId :: serviceNameAndPathBucketId =>
+          RateLimitRuleMatcher.matchById(serviceRule, serviceNameAndPathBucketId.head) must_== true
+        case Nil => (true must beFalse).setMessage(
+          "In this test context, RequestNormalization should always return a list"
+        )
+      }
     }
   }
 

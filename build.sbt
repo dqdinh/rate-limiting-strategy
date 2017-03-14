@@ -16,6 +16,27 @@ lazy val root = (project in file(".")).
       "com.chuusai" %% "shapeless" % "2.3.2",
       "org.typelevel" %% "cats" % "0.9.0",
       "org.specs2" %% "specs2-core" % "3.8.8",
-      "org.specs2" %% "specs2-scalacheck" % "3.8.8"
+      "org.specs2" %% "specs2-scalacheck" % "3.8.8",
+      "net.debasishg" %% "redisclient" % "3.3",
+      "io.circe" %% "circe-core" % "0.7.0",
+      "io.circe" %% "circe-generic" % "0.7.0",
+      "io.circe" %% "circe-parser" % "0.7.0"
+    ),
+    // Scalac options source - https://tpolecat.github.io/2014/04/11/scalac-flags.html
+    scalacOptions ++= Seq(
+      "-deprecation",
+      "-encoding", "UTF-8",
+      "-feature",
+      "-language:existentials",
+      "-language:higherKinds",
+      "-language:implicitConversions",
+      "-unchecked",
+      "-Xfatal-warnings",
+      "-Xlint",
+      "-Yno-adapted-args",
+      "-Ywarn-dead-code",     // N.B. doesn't work well with the ??? hole
+      "-Ywarn-value-discard"
     )
   )
+
+lazy val example = (project in file("example")).dependsOn(root)
