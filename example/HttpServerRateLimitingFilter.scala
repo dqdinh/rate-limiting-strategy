@@ -4,7 +4,7 @@ import com.twitter.finagle.builder.{Server, ServerBuilder}
 import com.twitter.finagle.http._
 import com.twitter.finagle.http.filter.ExceptionFilter
 import com.twitter.finagle.service.RateLimitingFilter
-import com.twitter.finagle.{Service, RefusedByRateLimiter}
+import com.twitter.finagle.{Service, RefusedByRateLimiter, SimpleFilter}
 import com.twitter.util.Future
 import java.net.InetSocketAddress
 import shapeless.tag
@@ -44,7 +44,7 @@ object HttpServer {
     val serviceLookup = (req: Request) => Some(serviceName)
     val claimLookup = (req: Request) => None
     val rulesLookup = () => List(serviceNameRule, serviceApiRule)
-    val runRedisOps = (rule: RateLimitRule) => RedisOps.processRateLimitRule(RedisInstance, rule)
+    val runRedisOps = (rule: RateLimitRule) => RedisOps.runLeakyBucket(RedisInstance, rule)
     val leakAndIncFn = (rule: RateLimitRule) => LeakyBucket.leakAndIncBucketTokens(rule, runRedisOps)
     val processRule = (rule: RateLimitRule) => LeakyBucket.processRule(rule, leakAndIncFn)
 
@@ -56,14 +56,37 @@ object HttpServer {
       processRule
     )
 
+    /**
+      * A simple Filter that catches exceptions and converts them to appropriate
+      * HTTP responses.
+      */
+    class HandleExceptions extends SimpleFilter[Request, Response] {
+      def apply(request: Request, service: Service[Request, Response]) = {
+
+        // `handle` asynchronously handles exceptions.
+        service(request) handle { case error =>
+          val statusCode = error match {
+            case _: IllegalArgumentException =>
+              Status.Forbidden
+            case _ =>
+              Status.InternalServerError
+          }
+          val errorResponse = Response(Version.Http11, statusCode)
+          errorResponse.contentString = error.getMessage + "\n" + error.getStackTrace.mkString("\n")
+          errorResponse
+        }
+      }
+    }
+
     // Filters
+    val handleExceptions = new HandleExceptions
     val handleRefusedByRateLimiter = new HandleRefusedByRateLimiterFilter
     val rateLimitFilter = new RateLimitingFilter[Request, Response](
       req => rateLimitStrategy(req)
     )
 
     // compose the Filters and Service together:
-    val myService: Service[Request, Response] = handleRefusedByRateLimiter andThen rateLimitFilter andThen okResponse
+    val myService: Service[Request, Response] = handleExceptions andThen handleRefusedByRateLimiter andThen rateLimitFilter andThen okResponse
 
     val server: Server = ServerBuilder()
       .codec(Http())

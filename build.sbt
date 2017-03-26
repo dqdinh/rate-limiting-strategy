@@ -12,12 +12,14 @@ lazy val root = (project in file(".")).
                 )),
     name := "rate-limiting-filter",
     libraryDependencies ++= Seq(
+      "ch.qos.logback" % "logback-classic" % "1.1.7",
+      "com.typesafe.scala-logging" %% "scala-logging" % "3.5.0",
       "com.twitter" %% "finagle-http" % "6.42.0",
       "com.chuusai" %% "shapeless" % "2.3.2",
       "org.typelevel" %% "cats" % "0.9.0",
       "org.specs2" %% "specs2-core" % "3.8.8",
       "org.specs2" %% "specs2-scalacheck" % "3.8.8",
-      "net.debasishg" %% "redisclient" % "3.3",
+      "net.debasishg" %% "redisclient" % "3.4",
       "io.circe" %% "circe-core" % "0.7.0",
       "io.circe" %% "circe-generic" % "0.7.0",
       "io.circe" %% "circe-parser" % "0.7.0"

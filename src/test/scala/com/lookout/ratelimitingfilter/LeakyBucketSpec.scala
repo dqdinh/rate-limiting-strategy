@@ -49,7 +49,7 @@ class LeakyBucketSpec extends Specification with ScalaCheck with Arbitraries {
 
   def throwRedisError = prop {
     (rule: RateLimitRule) => {
-      val errorMessage = s"Redis batch operation failed for rule id: ${rule.id}"
+      val errorMessage = "Error occured from one of the batched Redis commands"
       LeakyBucket.processRule(rule, (rule) => Failure(RedisError(errorMessage))) must throwA[RedisError](errorMessage)
     }
   }
@@ -57,7 +57,7 @@ class LeakyBucketSpec extends Specification with ScalaCheck with Arbitraries {
   def redisError = prop {
     (rule: RateLimitRule) => {
       LeakyBucket.leakAndIncBucketTokens(rule, (rule) => None) must beFailedTry
-        .withThrowable[RedisError](s"Redis batch operation failed for rule id: ${rule.id}")
+        .withThrowable[RedisError](s"Redis MULTI operation failed for rule id: ${rule.id}")
     }
   }
 

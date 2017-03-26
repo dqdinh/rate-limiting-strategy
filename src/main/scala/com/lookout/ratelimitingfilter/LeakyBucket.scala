@@ -28,7 +28,7 @@ object LeakyBucket {
         val pattern(tokenCount) = redisOperationResults.last.toString
         Integer.parseInt(tokenCount)
       }
-      case None => throw RedisError(s"Redis batch operation failed for rule id: ${rule.id}")
+      case None => throw RedisError(s"Redis MULTI operation failed for rule id: ${rule.id}")
     }
   }
 
@@ -37,10 +37,13 @@ object LeakyBucket {
     */
   def processRule(rule: RateLimitRule, leakAndIncFn: (RateLimitRule) => Try[Int]): Boolean = {
     leakAndIncFn(rule) match {
-      case Success(tokenCount) if tokenCount < rule.threshold => true
-      case Success(tokenCount) if tokenCount > rule.threshold => {
-        LOG.info(s"Request is rate limited with rule id: ${rule.id} and threshold: ${rule.threshold}")
-        false
+      case Success(tokenCount) => {
+        if (tokenCount < rule.threshold) {
+          true
+        } else {
+          LOG.info(s"Request is rate limited with rule id: ${rule.id} and threshold: ${rule.threshold}")
+          false
+        }
       }
       case Failure(error) => throw error
     }

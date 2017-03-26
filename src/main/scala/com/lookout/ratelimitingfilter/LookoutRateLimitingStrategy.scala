@@ -39,7 +39,7 @@ case class LookoutRateLimitingStrategy(
       matchedRules.map(processRule).reduce(_ && _)
     } catch {
       case e: RedisError => {
-        LOG.info("Redis error. Rate limiting is switched off.")
+        LOG.info(s"Redis error. Rate limiting is switched off. ${e.getMessage}")
         true
       }
     }
