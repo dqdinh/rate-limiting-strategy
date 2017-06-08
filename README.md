@@ -1,4 +1,4 @@
-#+TITLE: Example Strategy for Finagle's Rate Limiting Filter
+# Example Strategy for Finagle's Rate Limiting Filter
 
 [![Build Status](https://travis-ci.org/lookout/rate-limiting-filter.svg?branch=master)](https://travis-ci.org/lookout/rate-limiting-filter)
 
@@ -10,26 +10,29 @@ You can add your own custom strategy and use `LookoutRateLimitingStrategy.scala`
 
 For more details, please see ./docs/DESIGN.org.
 
-* Development Setup
+## Development Setup
 Install Scala and SBT - http://www.scala-sbt.org/0.13/docs/Setup.html
 
 Alternatively, you can use a self-contained sbt script:
-#+BEGIN_SRC sh
-./ci/bin/sbt
-#+END_SRC
 
-* Running Tests
-#+BEGIN_SRC sh
-sbt test
-#+END_SRC
+```bash
+  ./ci/bin/sbt
+```
 
-* Demo
-** Running an example http server with the rate limiting filter
-#+BEGIN_SRC sh
-sbt "project example" "run HttpServer"
-#+END_SRC
+## Running Tests
 
-** Setup
+```bash
+  sbt test
+```
+
+## Demo
+### Running an example http server with the rate limiting filter
+
+```bash
+  sbt "project example" "run HttpServer"
+```
+
+### Setup
 - Http server running with ratelimit filter
 - redis as the data store
 - There are two rateLimitRules:
@@ -38,24 +41,24 @@ sbt "project example" "run HttpServer"
 - We'll call GET on /les and after 5 times, it will trigger the rate limit.
 - However, calling / will still pass through, but it will rate limit after 5 times
 
-** Run 1: Rate Limit by API and Service Name
+### Run 1: Rate Limit by API and Service Name
 - run `curl localhost:8080/les` times 5
 - show server println
 - show redis logs
 - check redis console
 
-** Run 2: Rate Limit by Service Name
+### Run 2: Rate Limit by Service Name
 - run `curl localhost:8080` times 5
 - show server println
 - show redis logs
 - check redis console
 
-* Motivation for open sourcing this project
+## Motivation for open sourcing this project
 We thought open sourcing this project would be useful since there is a lack of open sourced and
 non-trivial Finagle rate limiting strategies.
 
 Many Scala projects at Lookout use Finagle and this is our way of giving back to the OSS community.
 
-* Authors
+## Authors
 - [@dqdinh](https://github.com/dqdinh)
 - [@avalade](https://github.com/avalade)
