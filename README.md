@@ -54,6 +54,7 @@ Alternatively, you can use a self-contained sbt script:
 - check redis console
 
 ## Motivation for open sourcing this project
+
 We thought open sourcing this project would be useful since there is a lack of open sourced and
 non-trivial Finagle rate limiting strategies.
 
