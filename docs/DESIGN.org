@@ -1,4 +1,4 @@
-#+TITLE: Rate Limiting at Lookout
+#+TITLE: Rate Limiting Strategy
 #+PROPERTY: mkdirp yes
 
 * Summary
@@ -118,9 +118,8 @@ We have three different buckets that a request could map to:
 - subject bucket
 - enterprise bucket
 
-All requests that map to the same service will increment the =service bucket=,
-i.e., l4e and argos are services and all requests to them would count against
-the =service bucket=. The purpose of this bucket would be for load shedding
+All requests that map to the same service will increment the =service bucket=.
+The purpose of this bucket would be for load shedding
 for the entire service. The =service bucket= will require some kind of map lookup
 where given a path, we should then extract some string that represents the string.
 This could be represented by some function that we pass into the `apply` method by
